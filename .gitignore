@@ -1,0 +1,4 @@
+*.o
+chair.elf
+*~
+.cached_payload
