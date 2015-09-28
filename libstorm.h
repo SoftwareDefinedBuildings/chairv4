@@ -181,6 +181,66 @@ namespace storm
     const std::shared_ptr<std::function<void(std::shared_ptr<Packet>)>> callback;
     std::shared_ptr<UDPSocket> self;
   };
+  namespace flash
+  {
+    class FlashWOperation;
+    class FlashROperation;
+  }
+  namespace _priv
+  {
+    void flash_wcallback(flash::FlashWOperation *op, int status);
+    void flash_rcallback(flash::FlashROperation *op, int status);
+  }
+  namespace flash
+  {
+    class FlashWOperation
+    {
+    public:
+      FlashWOperation(buf_t payload, std::function<void(int, buf_t)> callback)
+        :payload(move(payload)), callback(callback)
+      {
+      }
+      void invoke(int status)
+      {
+        callback(status, move(payload));
+        self.reset();
+      }
+      buf_t payload;
+      std::function<void(int, buf_t)> callback;
+      std::shared_ptr<FlashWOperation> self;
+    };
+    class FlashROperation
+    {
+    public:
+      FlashROperation(buf_t payload, size_t length, std::function<void(int, buf_t)> callback)
+        : length(length), payload(move(payload)), callback(callback)
+      {
+      }
+      void invoke(int status)
+      {
+        callback(status, move(payload));
+        self.reset();
+      }
+      size_t length;
+      buf_t payload;
+      std::function<void(int, buf_t)> callback;
+      std::shared_ptr<FlashROperation> self;
+    };
+    template <typename T> std::shared_ptr<FlashWOperation> write(uint32_t address, buf_t payload, uint8_t length, T callback)
+    {
+      auto rv = std::make_shared<FlashWOperation>(move(payload), std::function<void(int, buf_t)>(callback));
+      rv->self = rv; //circular reference to prevent dealloc.
+      int sysrv = _priv::syscall_ex(0xA02, address, &((*rv->payload)[0]), length, _priv::flash_wcallback, rv.get());
+      return sysrv ? nullptr : rv;
+    }
+    template <typename T> std::shared_ptr<FlashROperation> read(uint32_t address, buf_t target, uint8_t length, T callback)
+    {
+      auto rv = std::make_shared<FlashROperation>(move(target), length, std::function<void(int, buf_t)>(callback));
+      rv->self = rv; //circular reference to prevent dealloc.
+      int sysrv = _priv::syscall_ex(0xA01, address, &((*rv->payload)[0]), length, _priv::flash_rcallback, rv.get());
+      return sysrv ? nullptr : rv;
+    }
+  }
   namespace i2c
   {
     class I2CWOperation;

@@ -184,12 +184,12 @@ namespace firestorm
 
       // this array represents the number of days in one non-leap year at
       //    the beginning of each month
-      const uint32_t days_to_months[13] =
+      static constexpr uint32_t days_to_months[13] =
       {
           0,31,59,90,120,151,181,212,243,273,304,334,365
       };
 
-      uint32_t date_to_binary(rtcc_time_t &dt)
+      static uint32_t date_to_binary(rtcc_time_t &dt)
       {
          uint32_t iday;
          uint32_t val;
@@ -203,6 +203,13 @@ namespace firestorm
          return val;
       }
 
+      void getUnixTime(std::function<void(uint32_t)> const& result)
+      {
+        getRTCTime([result](rtcc_time_t t)
+        {
+          result(date_to_binary(t));
+        });
+      }
       void getRTCTime(std::function<void(rtcc_time_t)> const& result)
       {
         buf_t res = mkbuf(7);

@@ -305,5 +305,19 @@ namespace storm
         op->invoke(status);
       });
     }
+    void flash_wcallback(flash::FlashWOperation *op, int status)
+    {
+      tq::add([op, status]
+      {
+        op->invoke(status);
+      });
+    }
+    void flash_rcallback(flash::FlashROperation *op, int status)
+    {
+      tq::add([op, status]
+      {
+        op->invoke(status);
+      });
+    }
   }
-} 
+}

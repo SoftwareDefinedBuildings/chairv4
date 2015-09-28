@@ -25,9 +25,9 @@ int main()
   {
     printf("The buffer has %d %d %d\n",
          (*buf)[0], (*buf)[1], (*buf)[2]);
-  }); 
+  });
 
- 
+
   //Using some library classes
   auto rtc = firestorm::RTCC();
   auto tempsensor = firestorm::TMP006();
@@ -48,6 +48,17 @@ int main()
         counter++;
         if (counter&1) printf("\n");
       });
+  });
+
+  auto b = mkbuf({4, 41});
+  storm::flash::write(0, b, 2, [](auto a, auto b)
+  {
+    printf("Wrote flash at addr 0\n");
+    auto b2 = mkbuf(3);
+    storm::flash::read(0, b2, 3, [](auto a, auto b2)
+    {
+      printf("read 3 bytes: %d %d %d\n", (*b2)[0], (*b2)[1], (*b2)[2]);
+    });
   });
 
   tq::scheduler();
