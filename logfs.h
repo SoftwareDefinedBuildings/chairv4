@@ -67,8 +67,8 @@ public:
   bool timeSynced = false;
   std::function<void(void)> oninitdone;
 
-  uint32_t read_block;
-  uint32_t write_block;
+  int32_t read_ptr;
+  int32_t write_ptr;
   buf_t temp_record;
 
   LogFS(firestorm::RTCC &rtc, std::function<void(void)> ondone)
@@ -100,26 +100,100 @@ public:
     }*/
   }
 
-  void _loadPointers(int fe, int le, int i, std::function<void(int, int)> ondone)
+  //States
+  //1 last block was free, looking for read ptr + write ptr
+  //2 last block was occupied, looking for read ptr + write ptr
+  //3 last block was free, looking for read ptr
+  //4 last block was occupied, looking for read ptr
+  //5 last block was free, looking for write ptr
+  //6 last block was occupied, looking for write ptr
+  void _loadPointers(int state, int i, int endi, std::function<void()> ondone)
   {
+    if (i == endi) {
+      ondone();
+      return
+    }
     if (i >= BMAX) {
-      ondone(fe, le);
-      return;
+      i = 0;
     }
     storm::flash::read(i*RSIZE, temp_record, RSIZE, [=](int s, buf_t b)
     {
-      int _fe = fe;
-      int _le = le;
       if ((i&0xFF) == 0)
       {
         printf("Just did i=%d\n", i);
       }
-      if ( (*b)[0] == 0xFF )
+      bool occ = (*b)[0] == 0xFF;
+      int _state;
+      switch (state)
       {
-        if (_fe == -1) _fe = i;
-        _le = i;
+        case 1: //last free, need rptr + wptr
+          if (occ)
+          {
+            read_ptr = i;
+            _state = 6;
+          }
+          else
+          {
+            _state = 1;
+          }
+          break;
+        case 2: //last occupied, need rptr + wptr
+          if (occ)
+          {
+            _state = 2;
+          }
+          else
+          {
+            write_ptr = i;
+            _state = 3;
+          }
+          break;
+        case 3: //last free, need rptr
+          if (occ)
+          {
+            read_ptr = i;
+            ondone();
+            return;
+          }
+          else
+          {
+            _state = 3;
+          }
+          break;
+        case 4: //last occupied, looking for read ptr
+          if (occ)
+          {
+            _state = 4;
+          }
+          else
+          {
+            _state = 3;
+          }
+          break;
+        case 5: //last free, looking for write ptr
+          if (occ)
+          {
+            _state = 6;
+          }
+          else
+          {
+            _state = 5;
+          }
+          break;
+        case 6: //last occupied, looking for write ptr
+          if (occ)
+          {
+            _state = 6;
+          }
+          else
+          {
+            write_ptr = i;
+            ondone();
+            return;
+          }
+          break;
       }
-      tq::add([=](){_loadPointers(_fe, _le, i+64, ondone);});
+      tq::add([=](){_loadPointers(state, i+1, endi, ondone);});
     });
   }
 
