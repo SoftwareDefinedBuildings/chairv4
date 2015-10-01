@@ -1,3 +1,7 @@
+
+#ifndef __LIBCHAIR_H__
+#define __LIBCHAIR_H__
+
 #include <stdio.h>
 #include "interface.h"
 #include <functional>
@@ -17,9 +21,9 @@ namespace firestorm
     {
     }
 
-    void read(buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
+    void read_offset(uint8_t offset, buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
     {
-      auto addrbuf = mkbuf({regaddr});
+      auto addrbuf = mkbuf({regaddr+offset});
       auto srv = i2c::write(devaddress, i2c::START, move(addrbuf), 1,
         [this,length,callback = move(callback),target = move(target)](int status, buf_t buf)
       {
@@ -46,11 +50,16 @@ namespace firestorm
       }
     }
 
-    void write(buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
+    void read(buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
+    {
+      read_offset(0, target, length, callback);
+    }
+
+    void write_offset(uint8_t offset, buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
     {
       auto msgbuf = mkbuf(length+1);
       std::memcpy(&(*msgbuf)[1], &(*msg)[0], length);
-      (*msgbuf)[0] = regaddr;
+      (*msgbuf)[0] = regaddr + offset;
 
       auto srv = i2c::write(devaddress, i2c::START | i2c::STOP, move(msgbuf), length+1,
         [callback,msg = move(msg)](int status, buf_t buf)
@@ -63,6 +72,10 @@ namespace firestorm
       {
         callback(i2c::SYSCALL_ERR, nullptr);
       }
+    }
+    void write(buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
+    {
+      write_offset(0, msg, length, callback);
     }
   private:
     uint16_t devaddress;
@@ -119,7 +132,8 @@ namespace firestorm
       maintime(i2c::external(0xDE), 0x00),
       control (i2c::external(0xDE), 0x07),
       pd_time (i2c::external(0xDE), 0x18),
-      pu_time (i2c::external(0xDE), 0x1C)
+      pu_time (i2c::external(0xDE), 0x1C),
+      sram (i2c::external(0xDE), 0x20)
       {
         /*auto buf = mkbuf({0x80, 11,0, 0x08});
         maintime.write(buf, 4, [](int status, auto)\
@@ -152,6 +166,17 @@ namespace firestorm
         });
       }
 
+      void writeSRAM(uint8_t addr, buf_t value, uint8_t len, std::function<void(int)> cb)
+      {
+        sram.write_offset(addr, move(value), len, [cb](int status, buf_t res)
+        {
+          cb(status);
+        });
+      }
+      void readSRAM(uint8_t addr, buf_t dest, uint8_t len, std::function<void(int, buf_t)> cb)
+      {
+        sram.read_offset(addr, move(dest), len, cb);
+      }
       void calibratePrompt()
       {
         printf("Enter date in form y/m/d H:M:S\n");
@@ -275,3 +300,5 @@ namespace firestorm
     //SRAM at 0x20 but unused
   };
 }
+
+#endif

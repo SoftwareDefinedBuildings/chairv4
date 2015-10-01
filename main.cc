@@ -5,13 +5,36 @@
 #include "SEGGER_RTT.h"
 #include <malloc.h>
 #include "libchair.h"
-
+#include "cmdline.h"
+#include "religion.h"
+#include "logfs.h"
 
 using namespace storm;
+
+//System wiring
 
 int main()
 {
   printf("booting payload\n");
+
+  //Wiring
+  auto rtc = firestorm::RTCC();
+  auto tmp = firestorm::TMP006();
+  auto cli = CmdLine(rtc);
+  auto lg = LogFS(rtc, []()
+  {
+
+  });
+  
+
+
+
+
+
+
+
+#if 0
+
 
   //Posting a task
   tq::add([]
@@ -61,5 +84,7 @@ int main()
     });
   });
 
+  auto cli = CmdLine();
+#endif
   tq::scheduler();
 }

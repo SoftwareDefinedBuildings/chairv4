@@ -5,12 +5,12 @@ CC       = arm-none-eabi-g++
 CFLAGS   = -ffunction-sections -std=c++14 -fdata-sections -fno-strict-aliasing -g3 -Wall -mfloat-abi=soft -mthumb -mcpu=cortex-m4 --specs=nano.specs --specs=nosys.specs
 LDFLAGS  = -nostdlib -ffunction-sections -std=c++14 -fdata-sections -fno-strict-aliasing -g3  -nostartfiles -T kernelpayload.ld -mfloat-abi=soft -mcpu=cortex-m4 -mthumb --specs=nano.specs --specs=nosys.specs
 LDFLAGS += -L. -lrtt
-LDFLAGS += -lstdc++ libc.a -lgcc -Wl,--gc-sections
-#
+LDFLAGS += -lstdc++ -lc -lgcc -Wl,--gc-sections
+#we have libc.a rather than -lc above
 
 all: clean tester
 
-tester: main.o interface.o libstorm.o libchair.o
+tester: main.o interface.o libstorm.o libchair.o cmdline.o religion.o
 	$(CC) -o chair.elf $^ $(LDFLAGS)
 
 main.o: main.cc interface.h
@@ -19,10 +19,16 @@ main.o: main.cc interface.h
 interface.o: interface.c interface.h
 	$(CC) -c $(CFLAGS) $<
 
+cmdline.o: cmdline.cc cmdline.h
+		$(CC) -c $(CFLAGS) $<
+
 libstorm.o: libstorm.cc libstorm.h
 	$(CC) -c $(CFLAGS) $<
 
 libchair.o: libchair.cc libchair.h
+	$(CC) -c $(CFLAGS) $<
+
+religion.o: religion.cc religion.h
 	$(CC) -c $(CFLAGS) $<
 
 install:
