@@ -7,86 +7,94 @@
 #include <functional>
 #include "libstorm.h"
 #include <cstring>
-
+#include <time.h>
 
 using namespace storm;
 
 namespace firestorm
 {
+  template <uint16_t devaddress, uint8_t regaddr>
   class I2CRegister
   {
   public:
-    I2CRegister(uint16_t devaddress, uint8_t regaddr)
-    : devaddress(devaddress), regaddr(regaddr)
+    I2CRegister()
     {
     }
 
-    void read_offset(uint8_t offset, buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
+    static void read_offset(uint8_t offset, buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
     {
-      auto addrbuf = mkbuf({regaddr+offset});
-      auto srv = i2c::write(devaddress, i2c::START, move(addrbuf), 1,
-        [this,length,callback = move(callback),target = move(target)](int status, buf_t buf)
+      i2c::lock.acquire([=]
       {
-        if (status != i2c::OK)
+        auto addrbuf = mkbuf({(uint8_t)(regaddr+offset)});
+        auto srv = i2c::write(devaddress, i2c::START, move(addrbuf), 1,
+          [length,callback = move(callback),target = move(target)](int status, buf_t buf)
         {
-          callback(status, move(buf));
-          return;
-        }
-        auto srv = i2c::read(devaddress, i2c::RSTART | i2c::STOP, move(target), length,
-          [this,callback = move(callback),target = move(target)](int status, buf_t buf)
-        {
-          callback(status, move(buf));
-
-          return;
+          if (status != i2c::OK)
+          {
+            i2c::lock.release();
+            callback(status, move(buf));
+            return;
+          }
+          auto srv = i2c::read(devaddress, i2c::RSTART | i2c::STOP, move(target), length,
+            [callback = move(callback),target = move(target)](int status, buf_t buf)
+          {
+            i2c::lock.release();
+            callback(status, move(buf));
+            return;
+          });
+          if (srv == nullptr)
+          {
+            i2c::lock.release();
+            callback(i2c::SYSCALL_ERR, nullptr);
+          }
         });
         if (srv == nullptr)
         {
+          i2c::lock.release();
           callback(i2c::SYSCALL_ERR, nullptr);
         }
       });
-      if (srv == nullptr)
-      {
-        callback(i2c::SYSCALL_ERR, nullptr);
-      }
     }
 
-    void read(buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
+    static void read(buf_t target, uint16_t length, std::function<void(int,buf_t)> const& callback)
     {
       read_offset(0, target, length, callback);
     }
 
-    void write_offset(uint8_t offset, buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
+    static void write_offset(uint8_t offset, buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
     {
-      auto msgbuf = mkbuf(length+1);
-      std::memcpy(&(*msgbuf)[1], &(*msg)[0], length);
-      (*msgbuf)[0] = regaddr + offset;
+      i2c::lock.acquire([=]
+      {
+        auto msgbuf = mkbuf(length+1);
+        std::memcpy(&(*msgbuf)[1], &(*msg)[0], length);
+        (*msgbuf)[0] = regaddr + offset;
 
-      auto srv = i2c::write(devaddress, i2c::START | i2c::STOP, move(msgbuf), length+1,
-        [callback,msg = move(msg)](int status, buf_t buf)
-      {
-        //We don't use the new buffer we made, rather return the buffer the user
-        //gave us
-        callback(status, move(buf));
+        auto srv = i2c::write(devaddress, i2c::START | i2c::STOP, move(msgbuf), length+1,
+          [callback,msg = move(msg)](int status, buf_t buf)
+        {
+          //We don't use the new buffer we made, rather return the buffer the user
+          //gave us
+          i2c::lock.release();
+          callback(status, move(buf));
+        });
+        if (srv == nullptr)
+        {
+          i2c::lock.release();
+          callback(i2c::SYSCALL_ERR, nullptr);
+        }
       });
-      if (srv == nullptr)
-      {
-        callback(i2c::SYSCALL_ERR, nullptr);
-      }
     }
-    void write(buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
+    static void write(buf_t msg, uint16_t length, std::function<void(int,buf_t)>  const& callback)
     {
       write_offset(0, msg, length, callback);
     }
-  private:
-    uint16_t devaddress;
-    uint8_t regaddr;
   };
 
   class TMP006
   {
   public:
     TMP006()
-     : okay(false), config(i2c::TMP006,2), temp(i2c::TMP006,1), sensor(i2c::TMP006,0)
+     : okay(false)
     {
       //Reset the chip and sample at 1/sec
       buf_t cfg = mkbuf({0b11110100});
@@ -110,9 +118,9 @@ namespace firestorm
     }
   private:
     bool okay;
-    I2CRegister config;
-    I2CRegister temp;
-    I2CRegister sensor;
+    static I2CRegister<i2c::TMP006, 2> config;
+    static I2CRegister<i2c::TMP006, 2> temp;
+    static I2CRegister<i2c::TMP006, 0> sensor;
   };
 
   struct rtcc_time_t
@@ -128,12 +136,7 @@ namespace firestorm
   class RTCC
   {
   public:
-    RTCC() :
-      maintime(i2c::external(0xDE), 0x00),
-      control (i2c::external(0xDE), 0x07),
-      pd_time (i2c::external(0xDE), 0x18),
-      pu_time (i2c::external(0xDE), 0x1C),
-      sram (i2c::external(0xDE), 0x20)
+    RTCC()
       {
         /*auto buf = mkbuf({0x80, 11,0, 0x08});
         maintime.write(buf, 4, [](int status, auto)\
@@ -152,7 +155,7 @@ namespace firestorm
         auto buf = mkbuf({
           uint8_t(0x80 | ((dt.sec/10)<<4)   | (dt.sec%10)), //enable osc
           uint8_t(       ((dt.min/10)<<4)   | (dt.min%10)),
-          uint8_t(0x40 | ((dt.hour/10)<<4)  | (dt.hour%10)), //enable 24h
+          uint8_t(       ((dt.hour/10)<<4)  | (dt.hour%10)), //enable 24h
           uint8_t(0x08), //enable battery
           uint8_t(       ((dt.day/10)<<4)   | (dt.day%10)),
           uint8_t(       ((dt.month/10)<<4) | (dt.month%10)),
@@ -195,16 +198,19 @@ namespace firestorm
           printf("Done: %d\n", status);
         });
       }
-      /**
-       * These binary to bcd and back methods are adapted from an application note
-       * by Dallas / Maxim. They have been altered to work with
-       * the year field as number of years since 2000 not 1900.
-       *
-       * I have tested my modifications back and forth at various timepoints
-       * between 2012 and 2015 and it correlates with pythons algorithm.
-       *
-       * original: http://www.maxim-ic.com/app-notes/index.mvp/id/517
-       */
+
+      void binary_to_date(unsigned long binary, rtcc_time_t &dt)
+      {
+        time_t tt = binary;
+        struct tm *rv = gmtime(&tt);
+        dt.year = rv->tm_year - 100;
+        dt.month = rv->tm_mon + 1;
+        dt.day = rv->tm_mday;
+        dt.hour = rv->tm_hour;
+        dt.min = rv->tm_min;
+        dt.sec = rv->tm_sec;
+      }
+
 
 
       // this array represents the number of days in one non-leap year at
@@ -219,7 +225,7 @@ namespace firestorm
          uint32_t iday;
          uint32_t val;
          iday = 365 * (dt.year + 30) + days_to_months[dt.month-1] + (dt.day - 1);
-         iday = iday + (dt.year + 29) / 4;
+         iday = iday + (dt.year + 31) / 4;
          if ((dt.month > 2) && ((dt.year % 4) == 0))
          {
             iday++;
@@ -293,11 +299,11 @@ namespace firestorm
       }
 
   private:
-    I2CRegister maintime;
-    I2CRegister control;
-    I2CRegister pd_time;
-    I2CRegister pu_time;
-    //SRAM at 0x20 but unused
+    static I2CRegister<i2c::external(0xDE), 0x00> maintime;
+    static I2CRegister<i2c::external(0xDE), 0x07> control;
+    static I2CRegister<i2c::external(0xDE), 0x18> pd_time;
+    static I2CRegister<i2c::external(0xDE), 0x1c> pu_time;
+    static I2CRegister<i2c::external(0xDE), 0x20> sram;
   };
 }
 

@@ -8,28 +8,30 @@
 #include "cmdline.h"
 #include "religion.h"
 #include "logfs.h"
-
+#include "control.h"
+#include "sht25.h"
+#include "comms.h"
 using namespace storm;
+
 
 //System wiring
 
 int main()
 {
   printf("booting payload\n");
-
   //Wiring
   auto rtc = firestorm::RTCC();
-  auto tmp = firestorm::TMP006();
-  auto cli = CmdLine(rtc);
-  auto lg = LogFS(rtc, []()
-  {
-
-  });
-  
-
-
-
-
+  religion::set_sram(&rtc);
+  //auto tmp = firestorm::TMP006();
+  auto lg = firestorm::LogFS(rtc, []{});
+  auto cli = CmdLine(rtc, lg);
+  (void) cli;
+  auto sht = SHT25();
+  auto adc = MCP3425();
+  auto ctl = firestorm::Controls(lg, sht, adc, rtc);
+  (void) ctl;
+  auto comms = firestorm::Comms("2001:470:1f04:10::2", lg);
+  (void) comms;
 
 
 

@@ -15,8 +15,8 @@ void _cmdline_cb(void *r, int32_t num)
   static_cast<CmdLine*>(r)->fire(num);
 }
 
-CmdLine::CmdLine(firestorm::RTCC &rtcc)
- : rtcc(rtcc)
+CmdLine::CmdLine(firestorm::RTCC &rtcc, firestorm::LogFS &log)
+ : rtcc(rtcc), log(log)
 {
   ptr = 0;
   fire(0);
@@ -38,6 +38,7 @@ void CmdLine::runcmd(char* cmd)
     nt.hour = hour;
     nt.min = min;
     nt.sec = second;
+    nt.year = 15;
     rtcc.setTime(nt, [](int status)
     {
       printf("time set status=%d (%s)\n", status, status?"ERROR":"OKAY");
@@ -47,14 +48,41 @@ void CmdLine::runcmd(char* cmd)
   {
     rtcc.getRTCTime([](firestorm::rtcc_time_t t)
     {
-      printf("time: 2015/%d/%d %d:%d:%d\n", t.month, t.day, t.hour, t.day, t.sec);
+      printf("time: 20%02d/%d/%d %d:%d:%d\n", t.year, t.month, t.day, t.hour, t.min, t.sec);
     });
+  }
+  else if (strcmp(&action[0],"eraselog")==0)
+  {
+    log.factoryReset([]{
+      printf("Reset done\n");
+    });
+  }
+  else if (strcmp(&action[0],"_poplog")==0)
+  {
+    log.readRecord([](auto b)
+    {
+      if (b)
+      {
+        printf("Read: %02x %02x %02x %02x\n", (*b)[0], (*b)[1], (*b)[2], (*b)[3]);
+      }
+      else
+      {
+        printf("Nothing in log\n");
+      }
+    });
+  }
+  else if (strcmp(&action[0],"_ins")==0)
+  {
+    log.logTempHumidityOccupancy(32,85,0);
   }
   else
   {
     printf("possible actions: \n");
     printf(" gtime\n");
     printf(" stime MM DD HH MM SS\n");
+    printf(" eraselog (also serial number)\n");
+    printf(" _poplog\n");
+    printf(" _ins\n");
   }
 }
 void CmdLine::fire(uint32_t num)

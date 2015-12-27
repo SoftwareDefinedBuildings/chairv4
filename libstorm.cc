@@ -62,35 +62,43 @@ namespace storm
       }
     }
   }
-
-
+  namespace util
+  {
+    Resource::Resource()
+      :active(false)
+    {}
+    void Resource::acquire(std::function<void()> cb)
+    {
+      if (!active && queue.empty())
+      {
+        active = true;
+        tq::add(cb);
+      }
+      else
+      {
+        queue.push(cb);
+      }
+    }
+    void Resource::release()
+    {
+      if (queue.empty())
+      {
+        active = false;
+      }
+      else
+      {
+        auto cb = queue.front();
+        queue.pop();
+        tq::add(cb);
+      }
+    }
+  }
   namespace gpio
   {
     //Pin directions
     const Dir OUT={0};
     const Dir IN={1};
-    //Pins
-    const Pin D0 = {0,0x0109};
-    const Pin D1 = {1,0x010A};
-    const Pin D2 = {2,0x0010};
-    const Pin D3 = {3,0x000C};
-    const Pin D4 = {4,0x0209};
-    const Pin D5 = {5,0x000A};
-    const Pin D6 = {6,0x000B};
-    const Pin D7 = {7,0x0013};
-    const Pin D8 = {8,0x000D};
-    const Pin D9 = {9,0x010B};
-    const Pin D10= {10,0x010C};
-    const Pin D11= {11,0x010F};
-    const Pin D12= {12,0x010E};
-    const Pin D13= {13,0x010D};
-    const Pin A0 = {14,0x0105};
-    const Pin A1 = {15,0x0104};
-    const Pin A2 = {16,0x0103};
-    const Pin A3 = {17,0x0102};
-    const Pin A4 = {18,0x0007};
-    const Pin A5 = {19,0x0005};
-    const Pin GP0= {20,0x020A};
+
     //Pin values
     const uint8_t HIGH = 1;
     const uint8_t LOW = 0;
@@ -114,6 +122,14 @@ namespace storm
     uint32_t set(Pin pin, uint8_t value)
     {
       return _priv::syscall_ex(0x102, value, pin.spec);
+    }
+    uint8_t get(Pin pin)
+    {
+      return _priv::syscall_ex(0x103, pin.spec);
+    }
+    void set_pull(Pin pin, Pull pull)
+    {
+      _priv::syscall_ex(0x104, pull.dir, pin.spec);
     }
     void disable_irq(Pin pin)
     {
@@ -147,18 +163,6 @@ namespace storm
   }
 
 
-  template<> std::shared_ptr<Timer> Timer::once(uint32_t ticks, std::shared_ptr<std::function<void(void)>> callback)
-  {
-    auto rv = std::shared_ptr<Timer>(new Timer(false, ticks, callback));
-    rv->self = rv; //Circle reference, we cannot be deconstructed
-    return rv;
-  }
-  template<> std::shared_ptr<Timer> Timer::periodic(uint32_t ticks, std::shared_ptr<std::function<void(void)>> callback)
-  {
-    auto rv = std::shared_ptr<Timer>(new Timer(true, ticks, callback));
-    rv->self = rv; //Circle reference, we cannot be deconstructed
-    return rv;
-  }
   void Timer::cancel()
   {
     //TODO: purge any queued callbacks from the task queue
@@ -170,16 +174,24 @@ namespace storm
   }
   void Timer::fire()
   {
-    tq::add(callback);
+    auto t = self;
+    tq::add([=](){
+      (*callback)(t);
+    });
     if (!is_periodic)
     {
       self.reset(); //undangle ourselves to be deconstructed
     }
   }
-  Timer::Timer(bool periodic, uint32_t ticks, std::shared_ptr<std::function<void(void)>> callback):
+  Timer::Timer(bool periodic, uint32_t ticks, std::shared_ptr<std::function<void(std::shared_ptr<Timer>)>> callback):
     is_periodic(periodic), callback(callback)
   {
-    id = _priv::syscall_ex(0x201, ticks, periodic, static_cast<void(*)(Timer*)>(_priv::tmr_callback), this);
+    uint32_t rv = _priv::syscall_ex(0x201, ticks, periodic, static_cast<void(*)(Timer*)>(_priv::tmr_callback), this);
+    if (rv == (uint32_t)-1)
+    {
+      while(1);
+    }
+    id = rv;
   }
   namespace _priv
   {
@@ -205,6 +217,14 @@ namespace storm
         uint8_t rssi;
     } __attribute__((__packed__));
   }
+  namespace flash
+  {
+    void erase_chip()
+    {
+      _priv::syscall_ex(0xA03);
+    }
+    util::Resource lock;
+  }
   namespace sys
   {
     uint32_t now()
@@ -214,6 +234,10 @@ namespace storm
     uint32_t now(Shift shift)
     {
       return _priv::syscall_ex(shift.code);
+    }
+    void kick_wdt()
+    {
+      _priv::syscall_ex(0xb01);
     }
     void reset()
     {
@@ -282,6 +306,10 @@ namespace storm
     int rv = _priv::syscall_ex(0x304, id, payload, length, addr.data(), port);
     return rv == 0;
   }
+  bool UDPSocket::sendto(const std::string &addr, uint16_t port, buf_t payload, size_t length)
+  {
+    return sendto(addr, port, reinterpret_cast<const uint8_t*>(&((*payload)[0])), length);
+  }
   namespace _priv
   {
     void udp_callback(UDPSocket *sock, udp_recv_params_t *recv, char *addrstr)
@@ -307,9 +335,12 @@ namespace storm
     }
     void flash_wcallback(flash::FlashWOperation *op, int status)
     {
-      tq::add([op, status]
+      storm::Timer::once(40*storm::Timer::MILLISECOND, [=](auto)
       {
-        op->invoke(status);
+        tq::add([op, status]
+        {
+          op->invoke(status);
+        });
       });
     }
     void flash_rcallback(flash::FlashROperation *op, int status)
@@ -319,5 +350,9 @@ namespace storm
         op->invoke(status);
       });
     }
+  }
+  namespace i2c
+  {
+    util::Resource lock;
   }
 }

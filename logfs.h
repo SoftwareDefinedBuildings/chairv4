@@ -1,6 +1,10 @@
 
-#include "religion.h"
+#ifndef __LOGFS_H__
+#define __LOGFS_H__
 
+#include "religion.h"
+#include "libchair.h"
+#include "libstorm.h"
 //
 // Types of records:
 //
@@ -23,40 +27,67 @@
 //  HHcc cccc
 //  cCCC CCCC
 //
+// === battery voltage k = battery_ok
+// 1100 kttt
+//  8t : 11 bit relative timestamp
+//  16v : 24 bit battery voltage (msb first)
 //
-// [0] 28 bit full timestamp
-//  h: timestamp
-//  3: timestamp
-//
+// === boot record v= version r=reset count R=religion marker
+// 1101 vvvv
+// rrrr rrRR
+//  8R
+//  8R
+
 // 00xx : temp/hum telemetry
 // 01xx : settings
 // 10xx
-// 1100
-// 1101
+// 1100 : battery voltage
+// 1101 : boot record
 // 1110 : timestamp
 // 1111 : unalloc
 
+//A single fragment is 73 bytes max UDP payload.
+namespace firestorm
+{
 
 class LogFS
 {
 public:
+  LogFS(firestorm::RTCC &rtc, std::function<void(void)> ondone);
+  void logTempHumidityOccupancy(uint16_t temp, uint16_t humidity, bool occupancy);
+  void logSettings(uint8_t backCool, uint8_t backHeat, uint8_t bottomCool, uint8_t bottomHeat);
+  void logBatteryVoltageK(uint16_t v, bool battery_ok);
+  void logBootRecord(uint16_t reset_count, uint32_t religion_rec);
+  void factoryReset(std::function<void()>);
+  void readRecord(std::function<void(buf_t)> onDone);
+  void peekBatch(std::function<void(buf_t, uint32_t)> onDone);
+  void releaseBatch(uint32_t addr, uint32_t ts, std::function<void()> onDone);
+  uint32_t getAbsTimestamp();
+  bool isReady();
 
-  //Constants
-
-  //midnight 1st jan 2015
   static constexpr const int EPOCH = 1420070400;
   static constexpr const int T_TIMESTAMP = 0b11100000;
   static constexpr const int T_TEMPHUM   = 0b00000000;
   static constexpr const int T_SETTING   = 0b01000000;
+  static constexpr const int T_BATTERY   = 0b11000000;
+  static constexpr const int T_BOOTREC   = 0b11010000;
   static constexpr const int AMAX = 0x780000;
-  static constexpr const int BMAX = 0x1e0000;
   static constexpr const int BPAGE = 64;
   static constexpr const int RSIZE = 4;
+  static constexpr const int FIRMWARE_VERSION = 4;
+  static constexpr const int BMAX = AMAX/RSIZE; //Keep this a multiple of BATCHSIZE
+  static constexpr const int QWATERMARK = 6;
+  static constexpr const int BATCHSIZE = 16;
+private:
+  //Constants
+  //midnight 1st jan 2015
+
   //Time keeping
   firestorm::RTCC &rtc;
   //This lastRTCCTime is since the EPOCH above
   uint32_t lastRTCCTime;
   uint32_t lastTicks;
+
 
   //Relative time generation
   uint32_t lastLogTime;
@@ -65,40 +96,16 @@ public:
   bool initialized = false;
   bool pointersLoaded = false;
   bool timeSynced = false;
+  bool flashOpBusy = false;
+
   std::function<void(void)> oninitdone;
+
+  std::queue<buf_t> insert_queue;
 
   int32_t read_ptr;
   int32_t write_ptr;
   buf_t temp_record;
-
-  LogFS(firestorm::RTCC &rtc, std::function<void(void)> ondone)
-    :rtc(rtc), oninitdone(ondone)
-  {
-    temp_record = mkbuf(RSIZE);
-  /*  doSync([]()
-    {
-      timeSynced = true;
-      if (pointersLoaded)
-      {
-        initialized = true;
-        tq::post([](
-          ondone();
-        ));
-      }
-    });*/
-    loadPointers([](int a, int b)
-    {
-      printf("a=%d b=%d\n", a, b);
-    });
-  /*  loadPointers();
-    if (timeSynced)
-    {
-      initialized = true;
-      tq::post([](
-        ondone();
-      ));
-    }*/
-  }
+  buf_t blank_record;
 
   //States
   //1 last block was free, looking for read ptr + write ptr
@@ -107,219 +114,32 @@ public:
   //4 last block was occupied, looking for read ptr
   //5 last block was free, looking for write ptr
   //6 last block was occupied, looking for write ptr
-  void _loadPointers(int state, int i, int endi, std::function<void()> ondone)
-  {
-    if (i == endi) {
-      ondone();
-      return
-    }
-    if (i >= BMAX) {
-      i = 0;
-    }
-    storm::flash::read(i*RSIZE, temp_record, RSIZE, [=](int s, buf_t b)
-    {
-      if ((i&0xFF) == 0)
-      {
-        printf("Just did i=%d\n", i);
-      }
-      bool occ = (*b)[0] == 0xFF;
-      int _state;
-      switch (state)
-      {
-        case 1: //last free, need rptr + wptr
-          if (occ)
-          {
-            read_ptr = i;
-            _state = 6;
-          }
-          else
-          {
-            _state = 1;
-          }
-          break;
-        case 2: //last occupied, need rptr + wptr
-          if (occ)
-          {
-            _state = 2;
-          }
-          else
-          {
-            write_ptr = i;
-            _state = 3;
-          }
-          break;
-        case 3: //last free, need rptr
-          if (occ)
-          {
-            read_ptr = i;
-            ondone();
-            return;
-          }
-          else
-          {
-            _state = 3;
-          }
-          break;
-        case 4: //last occupied, looking for read ptr
-          if (occ)
-          {
-            _state = 4;
-          }
-          else
-          {
-            _state = 3;
-          }
-          break;
-        case 5: //last free, looking for write ptr
-          if (occ)
-          {
-            _state = 6;
-          }
-          else
-          {
-            _state = 5;
-          }
-          break;
-        case 6: //last occupied, looking for write ptr
-          if (occ)
-          {
-            _state = 6;
-          }
-          else
-          {
-            write_ptr = i;
-            ondone();
-            return;
-          }
-          break;
-      }
-      tq::add([=](){_loadPointers(state, i+1, endi, ondone);});
-    });
-  }
+  void _loadPointers(int state, int i, int endi, std::function<void()> ondone);
 
-  void savePointers(int fe, int le)
-  {
-    auto buf = mkbuf(8);
-    (*buf)[0] = fe & 0xFF;
-    (*buf)[1] = (fe >> 8) & 0xFF;
-    (*buf)[2] = (fe >> 16) & 0xFF;
-    (*buf)[3] = 0x5a;
-    (*buf)[4] = le & 0xFF;
-    (*buf)[5] = (le >> 8) & 0xFF;
-    (*buf)[6] = (le >> 16) & 0xFF;
-    (*buf)[7] = 0x5a;
-    rtc.writeSRAM(0, buf, 8, [=])
-  }
-  void loadPointers(std::function<void(int, int)> ondone)
-  {
-    printf("loading pointers\n");
-    auto buf = mkbuf(8);
-    rtc.readSRAM(0, buf, 8, [=](int status, buf_t buf)
-    {
-      if (status)
-      {
-        religion::enter_next_life(status);
-      }
-      int fe = -1;
-      int le = -1;
-      if ((*buf)[3] == 0x5a && (*buf)[7] != 0x5a)
-      {
-        fe = (*buf)[0];
-        fe |= (*buf)[1] << 8;
-        fe |= (*buf)[2] << 16;
-        se = (*buf)[4];
-        se |= (*buf)[5] << 8;
-        se |= (*buf)[6] << 16;
-      }
-      _loadPointers(fe, se, 0, ondone);
-    });
+  void savePointers(std::function<void()> ondone);
 
-  }
+  void bootstrapPointersWithHint(int write_hint, int read_hint, std::function<void()> ondone);
 
-  void doSync(std::function<void(void)> onDone)
-  {
-    rtc.getUnixTime([this, onDone](uint32_t t)
-    {
-      uint32_t n = storm::sys::now(storm::sys::SHIFT_16);
-      lastRTCCTime = t - EPOCH;
-      lastTicks = n;
-      tq::add([=](){onDone();});
-    });
-  }
-  void insertRecord(uint8_t b[4])
-  {
+  void bootstrapPointersWithNoHint(std::function<void()> ondone);
 
-  }
-  uint32_t getRelTimestamp()
-  {
-    return getAbsTimestamp() - lastLogTime;
-  }
-  bool isReady()
-  {
-    return initialized;
-  }
-  uint32_t getAbsTimestamp()
-  {
-    //We tick at 5.7220458984375 ticks per second.
-    //or 0.17476266666666668 seconds per tick
-    uint32_t t = storm::sys::now(storm::sys::SHIFT_16);
-    if (t < lastTicks) religion::enter_next_life(t);
-    t -= lastTicks;
-    t *= 1747;
-    t /= 10000;
-    //t is now the number of seconds since the last RTC timestamp
-    return lastRTCCTime + t;
-  }
-  void incLastTimestamp(uint32_t t)
-  {
-    lastLogTime += t;
-  }
-  void setLastTimestamp(uint32_t t)
-  {
-    lastLogTime = t;
-  }
-  void logTimestamp()
-  {
-    uint32_t t = getAbsTimestamp();
-    uint8_t b[4];
-    b[0] = T_TIMESTAMP | ((t >> 24) & 0xF);
-    b[1] = (t>>16) & 0xFF;
-    b[2] = (t>>8) & 0xFF;
-    b[3] = t & 0xFF;
-    setLastTimestamp(t);
-    insertRecord(b);
-  }
-  void logTempHumidity(uint16_t temp, uint16_t humidity)
-  {
-    uint32_t t = getRelTimestamp();
-    if (t > 15) {
-      logTimestamp();
-      t = 0;
-    }
-    uint8_t b[4];
-    b[0] = T_TEMPHUM | ((t << 2) & 0b111100) | ((humidity >> 10) & 0b11);
-    b[1] = (humidity >> 2) & 0xFF;
-    b[2] = ((humidity << 6) & 0b11000000) | ((temp >> 8) & 0b00111111);
-    b[3] = temp;
-    incLastTimestamp(t);
-    insertRecord(b);
-  }
-  void logSettings(uint8_t backCool, uint8_t backHeat, uint8_t bottomHeat, uint8_t bottomCool)
-  {
-    uint32_t t = getRelTimestamp();
-    if (t > 3) {
-      logTimestamp();
-      t = 0;
-    }
-    uint8_t b[4];
-    b[0] = T_SETTING | (t << 6) | (bottomHeat >> 3);
-    b[1] = (bottomHeat << 5) | ((backHeat >> 2) & 0b00011111);
-    b[2] = (backHeat << 6) | ((bottomCool >> 1) & 0b00111111);
-    b[3] = (bottomCool << 7) | (backCool & 0x7f);
-    incLastTimestamp(t);
-    insertRecord(b);
-  }
+  void loadPointers(std::function<void()> ondone);
 
-private:
+  void doSync(std::function<void(void)> onDone);
+
+  void insertRecord(buf_t b);
+
+  uint32_t getRelTimestamp();
+
+  void schedule_queue();
+
+  void incLastTimestamp(uint32_t t);
+
+  void setLastTimestamp(uint32_t t);
+
+  void logTimestamp();
 
 };
+
+}
+
+#endif

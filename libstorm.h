@@ -33,6 +33,21 @@ namespace storm
     }
     void __attribute__((noreturn)) scheduler();
   }
+  namespace util
+  {
+    class Resource
+    {
+    public:
+      Resource();
+      void acquire(std::function<void()>);
+      void release();
+    private:
+      bool active;
+      std::queue<std::function<void()>> queue;
+    };
+  }
+
+
   namespace gpio
   {
     struct Pin {
@@ -53,31 +68,33 @@ namespace storm
     extern const Dir OUT;
     extern const Dir IN;
     //Pins
-    extern const Pin D0;
-    extern const Pin D1;
-    extern const Pin D2;
-    extern const Pin D3;
-    extern const Pin D4;
-    extern const Pin D5;
-    extern const Pin D6;
-    extern const Pin D7;
-    extern const Pin D8;
-    extern const Pin D9;
-    extern const Pin D10;
-    extern const Pin D11;
-    extern const Pin D12;
-    extern const Pin D13;
-    extern const Pin A0;
-    extern const Pin A1;
-    extern const Pin A2;
-    extern const Pin A3;
-    extern const Pin A4;
-    extern const Pin A5;
-    extern const Pin GP0;
+
+    constexpr Pin D0 = {0,0x0109};
+    constexpr Pin D1 = {1,0x010A};
+    constexpr Pin D2 = {2,0x0010};
+    constexpr Pin D3 = {3,0x000C};
+    constexpr Pin D4 = {4,0x0209};
+    constexpr Pin D5 = {5,0x000A};
+    constexpr Pin D6 = {6,0x000B};
+    constexpr Pin D7 = {7,0x0013};
+    constexpr Pin D8 = {8,0x000D};
+    constexpr Pin D9 = {9,0x010B};
+    constexpr Pin D10 = {10,0x010C};
+    constexpr Pin D11 = {11,0x010F};
+    constexpr Pin D12 = {12,0x010E};
+    constexpr Pin D13 = {13,0x010D};
+    constexpr Pin A0 = {14,0x0105};
+    constexpr Pin A1 = {15,0x0104};
+    constexpr Pin A2 = {16,0x0103};
+    constexpr Pin A3 = {17,0x0102};
+    constexpr Pin A4 = {18,0x0007};
+    constexpr Pin A5 = {19,0x0005};
+    constexpr Pin GP0 = {20,0x020A};
+
     //Pin values
     extern const uint8_t HIGH;
-    extern const uint8_t LOW;;
-    extern const uint8_t TOGGLE;;
+    extern const uint8_t LOW;
+    extern const uint8_t TOGGLE;
     //Edges
     extern const Edge RISING;
     extern const Edge FALLING;
@@ -101,15 +118,17 @@ namespace storm
   class Timer
   {
   public:
+    Timer() = delete;
+    Timer(const Timer& that) = delete;
     template<typename T> static std::shared_ptr<Timer> once(uint32_t ticks, T callback)
     {
-      auto rv = std::shared_ptr<Timer>(new Timer(false, ticks, std::make_shared<std::function<void(void)>>(callback)));
+      auto rv = std::shared_ptr<Timer>(new Timer(false, ticks, std::make_shared<std::function<void(std::shared_ptr<Timer>)>>(callback)));
       rv->self = rv; //Circle reference, we cannot be deconstructed
       return rv;
     }
     template<typename T> static std::shared_ptr<Timer> periodic(uint32_t ticks, T callback)
     {
-      auto rv = std::shared_ptr<Timer>(new Timer(true, ticks, std::make_shared<std::function<void(void)>>(callback)));
+      auto rv = std::shared_ptr<Timer>(new Timer(true, ticks, std::make_shared<std::function<void(std::shared_ptr<Timer>)>>(callback)));
       rv->self = rv; //Circle reference, we cannot be deconstructed
       return rv;
     }
@@ -123,10 +142,10 @@ namespace storm
 
 
   private:
-    Timer(bool periodic, uint32_t ticks, std::shared_ptr<std::function<void(void)>> callback);
+    Timer(bool periodic, uint32_t ticks, std::shared_ptr<std::function<void(std::shared_ptr<Timer>)>> callback);
     uint16_t id;
     bool is_periodic;
-    const std::shared_ptr<std::function<void(void)>> callback;
+    const std::shared_ptr<std::function<void(std::shared_ptr<Timer>)>> callback;
     std::shared_ptr<Timer> self;
   };
   namespace sys
@@ -137,6 +156,7 @@ namespace storm
     uint32_t now();
     uint32_t now(Shift shift);
     void reset();
+    void kick_wdt();
     extern const Shift SHIFT_0;
     extern const Shift SHIFT_16;
     extern const Shift SHIFT_48;
@@ -174,6 +194,7 @@ namespace storm
     void _handle(_priv::udp_recv_params_t *recv, char *addrstr);
     bool sendto(const std::string &addr, uint16_t port, const std::string &payload);
     bool sendto(const std::string &addr, uint16_t port, const uint8_t *payload, size_t length);
+    bool sendto(const std::string &addr, uint16_t port, buf_t payload, size_t length);
   private:
     UDPSocket(uint16_t port, std::shared_ptr<std::function<void(std::shared_ptr<Packet>)>> callback);
     int32_t id;
@@ -185,6 +206,7 @@ namespace storm
   {
     class FlashWOperation;
     class FlashROperation;
+    extern util::Resource lock;
   }
   namespace _priv
   {
@@ -240,6 +262,7 @@ namespace storm
       int sysrv = _priv::syscall_ex(0xA01, address, &((*rv->payload)[0]), length, _priv::flash_rcallback, rv.get());
       return sysrv ? nullptr : rv;
     }
+    void erase_chip();
   }
   namespace i2c
   {
@@ -253,6 +276,8 @@ namespace storm
   }
   namespace i2c
   {
+    extern util::Resource lock;
+
     class I2CFlag
     {
     public:
