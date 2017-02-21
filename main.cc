@@ -30,7 +30,7 @@ int main()
   auto adc = MCP3425();
   auto ctl = firestorm::Controls(lg, sht, adc, rtc);
   (void) ctl;
-  auto comms = firestorm::Comms("2001:470:1f04:10::2", lg);
+  auto comms = firestorm::Comms("2001:470:4112:1::5", lg, ctl);
   (void) comms;
 
 

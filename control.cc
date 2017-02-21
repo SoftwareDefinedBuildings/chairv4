@@ -44,7 +44,7 @@
  * 38: FIRMWARE VERSION
  */
 
-
+#define TICK_INTERVAL
 firestorm::Controls::Controls(firestorm::LogFS &l, SHT25 &tmp, MCP3425 &adc, firestorm::RTCC &rtc)
  : log(l), sht(tmp), adc(adc), rtc(rtc),
    busy_ticking(false), actuation_override(true), reset_count(0),
@@ -101,7 +101,9 @@ firestorm::Controls::Controls(firestorm::LogFS &l, SHT25 &tmp, MCP3425 &adc, fir
    {
      this->tickHeaters();
    });
-   storm::Timer::periodic(2*storm::Timer::SECOND, [this](auto)
+   //This was 2 seconds
+   #warning still have demo hack
+   storm::Timer::periodic(500*storm::Timer::MILLISECOND, [this](auto)
    {
      this->logtick();
    });
@@ -226,6 +228,25 @@ void firestorm::Controls::loadSettings()
       });
 
     }
+  });
+}
+void firestorm::Controls::setSettings(int8_t nback_fan, int8_t nbottom_fan, int8_t nback_heat, int8_t nbottom_heat)
+{
+  actuation_override = true;
+  busy_ticking = true;
+  if (nback_fan >= 0)
+    back_fan = nback_fan;
+  if (nbottom_fan >= 0)
+    bottom_fan = nbottom_fan;
+  if (nback_heat >= 0)
+    back_heat = nback_heat;
+  if (nbottom_heat >= 0)
+    bottom_heat = nbottom_heat;
+  tq::add([this]
+  {
+    this->upsync();
+    actuation_override = true;
+    busy_ticking = false;
   });
 }
 void firestorm::Controls::tick()

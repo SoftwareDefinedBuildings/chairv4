@@ -6,9 +6,10 @@ namespace firestorm
   class Comms
   {
   public:
-    Comms(std::string remote, firestorm::LogFS &lg)
-      :remote(remote), lg(lg)
+    Comms(std::string remote, firestorm::LogFS &lg, firestorm::Controls &ctl)
+      :remote(remote), lg(lg), ctl(ctl)
     {
+      last_eid = 1;
       sock = storm::UDPSocket::open(4039, [this](auto packet)
       {
         //Got reply packet
@@ -18,6 +19,21 @@ namespace firestorm
         this->lg.releaseBatch(read_ptr, ts, []{
           //printf("Released batch\n");
         });
+      });
+      //BEARS
+      bsock = storm::UDPSocket::open(5005, [this](auto packet)
+      {
+        uint32_t eid = (uint32_t)packet->payload[0] + (((uint32_t)packet->payload[1]) << 8) +
+                (((uint32_t)packet->payload[2]) << 16) + (((uint32_t)packet->payload[3]) << 24);
+        if (eid <= last_eid) {
+          return;
+        }
+        last_eid = eid;
+        //back fan 4
+        //back heat 5
+        //bottom fan6
+        //bottom heat 7
+        this->ctl.setSettings((int8_t)packet->payload[4], (int8_t)packet->payload[6], (int8_t)packet->payload[5], (int8_t)packet->payload[7]);
       });
       storm::Timer::periodic(1*storm::Timer::SECOND, [this](auto)
       {
@@ -44,6 +60,9 @@ namespace firestorm
   private:
     std::string remote;
     std::shared_ptr<storm::UDPSocket> sock;
+    std::shared_ptr<storm::UDPSocket> bsock;
+    uint32_t last_eid;
     firestorm::LogFS &lg;
+    firestorm::Controls &ctl;
   };
 }

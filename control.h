@@ -14,7 +14,7 @@ namespace firestorm
   {
   public:
     Controls(firestorm::LogFS &l, SHT25 &tmp, MCP3425 &adc, firestorm::RTCC &rtc);
-
+    void setSettings(int8_t nback_fan, int8_t nbottom_fan, int8_t nback_heat, int8_t nbottom_heat);
 
 
   private:
@@ -35,6 +35,7 @@ namespace firestorm
     void syncfans();
     void saveSettings();
     void loadSettings();
+
     bool busy_ticking;
     bool actuation_override;
     uint8_t ll_bottom_heat;
